@@ -1,4 +1,4 @@
-PrivacyGuard
+PrivateView
 Protect your screen from shoulder surfing in public places.
 
 PrivacyGuard is a desktop application that intelligently protects sensitive on-screen information using customizable blur modes, focus areas, and future AI-powered privacy features.
