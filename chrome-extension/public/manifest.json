@@ -7,9 +7,16 @@
     "activeTab",
     "scripting",
     "storage"
-  ],
+  ], 
+  "icons": {
+        "128": "icons/cover.png"
+    },
+
   "action": {
     "default_title": "PrivateView",
-    "default_popup": "index.html"
+    "default_popup": "index.html",
+    "default_icon": "icons/cover.png"
   }
+   
+
 }

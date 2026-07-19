@@ -1,14 +1,25 @@
 import { useEffect, useState } from 'react';
 import './App.css';
 
+const APP_COVER = '/icons/cover.png';
+
 const PRIVATE_VIEW_OVERLAY_ID =
   'privateview-spotlight-overlay';
+
+const PRIVATE_VIEW_SELECTION_ID =
+  'privateview-selection-overlay';
+
+const PRIVATE_VIEW_PICKER_ID =
+  'privateview-selection-picker';
+
+const PRIVATE_VIEW_AI_OVERLAY_ID =
+  'privateview-ai-overlay';
+
 
 type ModeId =
   | 'spotlight'
   | 'selection'
-  | 'manual-blur'
-  | 'smart-ai';
+  | 'ai-protection';
 
 type PrivacyMode = {
   id: ModeId;
@@ -24,6 +35,19 @@ type PrivateViewSettings = {
   selectedMode: ModeId;
 };
 
+type SelectionRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+type PageModeState = {
+  spotlightActive: boolean;
+  selectionActive: boolean;
+  pickerActive: boolean;
+};
+
 const DEFAULT_SETTINGS: PrivateViewSettings = {
   enabled: false,
   blurAmount: 12,
@@ -35,33 +59,29 @@ const privacyModes: PrivacyMode[] = [
   {
     id: 'spotlight',
     name: 'Spotlight',
-    icon: '◉',
+    icon: '/modes/spott.jpg',
     description:
       'Blurs the entire page and reveals only the area around your mouse.',
   },
   {
     id: 'selection',
     name: 'Selection',
-    icon: '▣',
+    icon: '/modes/selection photo.png',
     description:
-      'Select one area that stays visible while the rest of the page is blurred. Coming soon.',
+      'Select one area that stays visible while the rest of the page is blurred.',
   },
   {
-    id: 'manual-blur',
-    name: 'Manual Blur',
-    icon: '▧',
-    description:
-      'Choose specific elements or areas on the page and blur them manually. Coming soon.',
-  },
-  {
-    id: 'smart-ai',
-    name: 'Smart AI',
-    icon: '✦',
+    id: 'ai-protection',
+    name: 'AI Protection',
+    icon: '/modes/ai cover.png',
     description:
       'Automatically detects and hides sensitive information on the page. Coming soon.',
   },
 ];
 
+function isImageIcon(icon: string): boolean {
+  return icon.startsWith('/');
+}
 
 async function getActiveTabId(): Promise<number> {
   const [tab] = await chrome.tabs.query({
@@ -76,12 +96,10 @@ async function getActiveTabId(): Promise<number> {
   return tab.id;
 }
 
-/*
-  الدالة دي يتم تشغيلها داخل صفحة الموقع نفسها.
+/* =========================
+   Spotlight Mode
+========================= */
 
-  بتضيف Overlay فوق الصفحة، وتعمل Blur،
-  وبعدها تعمل فتحة واضحة حول مكان الماوس.
-*/
 function enableSpotlightBlur(
   overlayId: string,
   blurAmount: number,
@@ -91,9 +109,6 @@ function enableSpotlightBlur(
     overlayId,
   ) as HTMLDivElement | null;
 
-  /*
-    لو الـOverlay مش موجود، بننشئه.
-  */
   if (!overlay) {
     overlay = document.createElement('div');
     overlay.id = overlayId;
@@ -104,40 +119,24 @@ function enableSpotlightBlur(
       inset: '0',
       width: '100vw',
       height: '100vh',
-
-      /*
-        أكبر z-index تقريبًا علشان يبقى فوق الصفحة.
-      */
       zIndex: '2147483647',
-
-      /*
-        علشان الـOverlay ميمنعش الضغط على
-        فيديوهات أو أزرار الصفحة.
-      */
       pointerEvents: 'none',
-
       background: 'rgba(5, 8, 18, 0.08)',
-
       transition:
         'backdrop-filter 120ms ease',
     });
 
-    document.documentElement.appendChild(overlay);
+    document.documentElement.appendChild(
+      overlay,
+    );
   }
 
-  /*
-    بنحفظ القيم داخل الـOverlay نفسه،
-    علشان الـMouse Listener يقرأ أحدث قيمة.
-  */
   overlay.dataset.blurAmount =
     String(blurAmount);
 
   overlay.dataset.spotlightSize =
     String(spotlightSize);
 
-  /*
-    تطبيق قوة الـBlur.
-  */
   overlay.style.setProperty(
     'backdrop-filter',
     `blur(${blurAmount}px)`,
@@ -148,9 +147,6 @@ function enableSpotlightBlur(
     `blur(${blurAmount}px)`,
   );
 
-  /*
-    الدالة المسؤولة عن تحريك الفتحة الواضحة.
-  */
   const renderSpotlight = (
     mouseX: number,
     mouseY: number,
@@ -171,12 +167,12 @@ function enableSpotlightBlur(
 
     const radius = currentSize / 2;
 
-    /*
-      Feather بتعمل حواف ناعمة حول المنطقة الواضحة.
-    */
     const feather = Math.max(
       25,
-      Math.min(50, currentSize * 0.15),
+      Math.min(
+        50,
+        currentSize * 0.15,
+      ),
     );
 
     const mask = `
@@ -198,9 +194,6 @@ function enableSpotlightBlur(
       mask,
     );
 
-    /*
-      نحفظ آخر مكان للماوس.
-    */
     document.documentElement.dataset
       .privateViewMouseX = String(mouseX);
 
@@ -208,10 +201,6 @@ function enableSpotlightBlur(
       .privateViewMouseY = String(mouseY);
   };
 
-  /*
-    أول مكان للـSpotlight هيكون آخر مكان محفوظ،
-    أو منتصف الشاشة لو مفيش مكان محفوظ.
-  */
   const initialX = Number(
     document.documentElement.dataset
       .privateViewMouseX ??
@@ -226,104 +215,96 @@ function enableSpotlightBlur(
 
   renderSpotlight(initialX, initialY);
 
-  /*
-    نتأكد إننا مش بنضيف Mouse Listener
-    أكثر من مرة.
-  */
   const listenerAlreadyAdded =
     document.documentElement.dataset
       .privateViewMouseListener === 'true';
 
-  if (!listenerAlreadyAdded) {
-    let animationFrameId = 0;
-    let nextMouseX = initialX;
-    let nextMouseY = initialY;
-
-    document.addEventListener(
-      'mousemove',
-      (event: MouseEvent) => {
-        nextMouseX = event.clientX;
-        nextMouseY = event.clientY;
-
-        /*
-          requestAnimationFrame بيمنع تنفيذ
-          تحديثات كثيرة جدًا أثناء تحريك الماوس.
-        */
-        if (animationFrameId !== 0) {
-          return;
-        }
-
-        animationFrameId =
-          window.requestAnimationFrame(() => {
-            animationFrameId = 0;
-
-            const currentOverlay =
-              document.getElementById(
-                overlayId,
-              ) as HTMLDivElement | null;
-
-            if (!currentOverlay) {
-              return;
-            }
-
-            const currentSize = Number(
-              currentOverlay.dataset
-                .spotlightSize ??
-                spotlightSize,
-            );
-
-            const radius = currentSize / 2;
-
-            const feather = Math.max(
-              25,
-              Math.min(
-                50,
-                currentSize * 0.15,
-              ),
-            );
-
-            const mask = `
-              radial-gradient(
-                circle at ${nextMouseX}px ${nextMouseY}px,
-                transparent 0px,
-                transparent ${radius}px,
-                black ${radius + feather}px
-              )
-            `;
-
-            currentOverlay.style.setProperty(
-              'mask-image',
-              mask,
-            );
-
-            currentOverlay.style.setProperty(
-              '-webkit-mask-image',
-              mask,
-            );
-
-            document.documentElement.dataset
-              .privateViewMouseX =
-              String(nextMouseX);
-
-            document.documentElement.dataset
-              .privateViewMouseY =
-              String(nextMouseY);
-          });
-      },
-      {
-        capture: true,
-        passive: true,
-      },
-    );
-
-    document.documentElement.dataset
-      .privateViewMouseListener = 'true';
+  if (listenerAlreadyAdded) {
+    return;
   }
+
+  let animationFrameId = 0;
+  let nextMouseX = initialX;
+  let nextMouseY = initialY;
+
+  document.addEventListener(
+    'mousemove',
+    (event: MouseEvent) => {
+      nextMouseX = event.clientX;
+      nextMouseY = event.clientY;
+
+      if (animationFrameId !== 0) {
+        return;
+      }
+
+      animationFrameId =
+        window.requestAnimationFrame(() => {
+          animationFrameId = 0;
+
+          const currentOverlay =
+            document.getElementById(
+              overlayId,
+            ) as HTMLDivElement | null;
+
+          if (!currentOverlay) {
+            return;
+          }
+
+          const currentSize = Number(
+            currentOverlay.dataset
+              .spotlightSize ??
+              spotlightSize,
+          );
+
+          const radius =
+            currentSize / 2;
+
+          const feather = Math.max(
+            25,
+            Math.min(
+              50,
+              currentSize * 0.15,
+            ),
+          );
+
+          const mask = `
+            radial-gradient(
+              circle at ${nextMouseX}px ${nextMouseY}px,
+              transparent 0px,
+              transparent ${radius}px,
+              black ${radius + feather}px
+            )
+          `;
+
+          currentOverlay.style.setProperty(
+            'mask-image',
+            mask,
+          );
+
+          currentOverlay.style.setProperty(
+            '-webkit-mask-image',
+            mask,
+          );
+
+          document.documentElement.dataset
+            .privateViewMouseX =
+            String(nextMouseX);
+
+          document.documentElement.dataset
+            .privateViewMouseY =
+            String(nextMouseY);
+        });
+    },
+    {
+      capture: true,
+      passive: true,
+    },
+  );
+
+  document.documentElement.dataset
+    .privateViewMouseListener = 'true';
 }
 
-/*
-  إزالة الـBlur من الصفحة.
-*/
 function disableSpotlightBlur(
   overlayId: string,
 ): void {
@@ -332,22 +313,520 @@ function disableSpotlightBlur(
     ?.remove();
 }
 
-/*
-  تشغيل أو تحديث الـBlur داخل الـTab الحالية.
-*/
-async function applySpotlightToCurrentTab(
+/* =========================
+   Selection Mode
+========================= */
+
+function startSelectionPicker(
+  selectionId: string,
+  pickerId: string,
   blurAmount: number,
-  spotlightSize: number,
-): Promise<void> {
+): void {
+  document
+    .getElementById(selectionId)
+    ?.remove();
+
+  document
+    .getElementById(pickerId)
+    ?.remove();
+
+  const picker =
+    document.createElement('div');
+
+  picker.id = pickerId;
+
+  Object.assign(picker.style, {
+    position: 'fixed',
+    inset: '0',
+    width: '100vw',
+    height: '100vh',
+    zIndex: '2147483647',
+    cursor: 'crosshair',
+    background:
+      'rgba(4, 8, 18, 0.30)',
+    userSelect: 'none',
+  });
+
+  const selectionBox =
+    document.createElement('div');
+
+  Object.assign(selectionBox.style, {
+    position: 'fixed',
+    display: 'none',
+    border: '2px solid #8b7cff',
+    borderRadius: '8px',
+    background:
+      'rgba(139, 124, 255, 0.12)',
+    boxShadow:
+      '0 0 0 1px rgba(255,255,255,0.25), 0 0 25px rgba(124,108,255,0.40)',
+    pointerEvents: 'none',
+  });
+
+  picker.appendChild(selectionBox);
+
+  document.documentElement.appendChild(
+    picker,
+  );
+
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  const createBlurPanel = (
+    styles: Partial<CSSStyleDeclaration>,
+  ): HTMLDivElement => {
+    const panel =
+      document.createElement('div');
+
+    panel.dataset
+      .privateViewSelectionPanel =
+      'true';
+
+    Object.assign(panel.style, {
+      position: 'fixed',
+      background:
+        'rgba(5, 8, 18, 0.08)',
+      pointerEvents: 'none',
+      ...styles,
+    });
+
+    panel.style.setProperty(
+      'backdrop-filter',
+      `blur(${blurAmount}px)`,
+    );
+
+    panel.style.setProperty(
+      '-webkit-backdrop-filter',
+      `blur(${blurAmount}px)`,
+    );
+
+    return panel;
+  };
+
+  const renderSelectionBlur = (
+    rect: SelectionRect,
+  ): void => {
+    document
+      .getElementById(selectionId)
+      ?.remove();
+
+    const root =
+      document.createElement('div');
+
+    root.id = selectionId;
+
+    Object.assign(root.style, {
+      position: 'fixed',
+      inset: '0',
+      width: '100vw',
+      height: '100vh',
+      zIndex: '2147483646',
+      pointerEvents: 'none',
+    });
+
+    root.dataset.blurAmount =
+      String(blurAmount);
+
+    root.dataset.left =
+      String(rect.left);
+
+    root.dataset.top =
+      String(rect.top);
+
+    root.dataset.width =
+      String(rect.width);
+
+    root.dataset.height =
+      String(rect.height);
+
+    const topPanel =
+      createBlurPanel({
+        top: '0',
+        left: '0',
+        width: '100vw',
+        height: `${rect.top}px`,
+      });
+
+    const bottomPanel =
+      createBlurPanel({
+        top: `${
+          rect.top + rect.height
+        }px`,
+        left: '0',
+        right: '0',
+        bottom: '0',
+      });
+
+    const leftPanel =
+      createBlurPanel({
+        top: `${rect.top}px`,
+        left: '0',
+        width: `${rect.left}px`,
+        height: `${rect.height}px`,
+      });
+
+    const rightPanel =
+      createBlurPanel({
+        top: `${rect.top}px`,
+        left: `${
+          rect.left + rect.width
+        }px`,
+        right: '0',
+        height: `${rect.height}px`,
+      });
+
+    const border =
+      document.createElement('div');
+
+    Object.assign(border.style, {
+      position: 'fixed',
+      left: `${rect.left}px`,
+      top: `${rect.top}px`,
+      width: `${rect.width}px`,
+      height: `${rect.height}px`,
+      border:
+        '2px solid rgba(139, 124, 255, 0.90)',
+      borderRadius: '8px',
+      boxShadow:
+        '0 0 20px rgba(124,108,255,0.30)',
+      pointerEvents: 'none',
+    });
+
+    root.append(
+      topPanel,
+      bottomPanel,
+      leftPanel,
+      rightPanel,
+      border,
+    );
+
+    document.documentElement.appendChild(
+      root,
+    );
+  };
+
+  function cleanupPicker(): void {
+    picker.remove();
+
+    window.removeEventListener(
+      'mousemove',
+      handleMouseMove,
+      true,
+    );
+
+    window.removeEventListener(
+      'mouseup',
+      handleMouseUp,
+      true,
+    );
+
+    document.removeEventListener(
+      'keydown',
+      handleKeyDown,
+      true,
+    );
+  }
+
+  function handleMouseDown(
+    event: MouseEvent,
+  ): void {
+    if (event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    isDragging = true;
+
+    startX = event.clientX;
+    startY = event.clientY;
+
+    Object.assign(
+      selectionBox.style,
+      {
+        display: 'block',
+        left: `${startX}px`,
+        top: `${startY}px`,
+        width: '0px',
+        height: '0px',
+      },
+    );
+  }
+
+  function handleMouseMove(
+    event: MouseEvent,
+  ): void {
+    if (!isDragging) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const currentX =
+      event.clientX;
+
+    const currentY =
+      event.clientY;
+
+    const left = Math.min(
+      startX,
+      currentX,
+    );
+
+    const top = Math.min(
+      startY,
+      currentY,
+    );
+
+    const width = Math.abs(
+      currentX - startX,
+    );
+
+    const height = Math.abs(
+      currentY - startY,
+    );
+
+    Object.assign(
+      selectionBox.style,
+      {
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${width}px`,
+        height: `${height}px`,
+      },
+    );
+  }
+
+  function handleMouseUp(
+    event: MouseEvent,
+  ): void {
+    if (!isDragging) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    isDragging = false;
+
+    const endX = event.clientX;
+    const endY = event.clientY;
+
+    const rect: SelectionRect = {
+      left: Math.min(
+        startX,
+        endX,
+      ),
+      top: Math.min(
+        startY,
+        endY,
+      ),
+      width: Math.abs(
+        endX - startX,
+      ),
+      height: Math.abs(
+        endY - startY,
+      ),
+    };
+
+    if (
+      rect.width < 30 ||
+      rect.height < 30
+    ) {
+      selectionBox.style.display =
+        'none';
+
+      return;
+    }
+
+    cleanupPicker();
+
+    renderSelectionBlur(rect);
+  }
+
+  function handleKeyDown(
+    event: KeyboardEvent,
+  ): void {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    cleanupPicker();
+  }
+
+  picker.addEventListener(
+    'mousedown',
+    handleMouseDown,
+    true,
+  );
+
+  window.addEventListener(
+    'mousemove',
+    handleMouseMove,
+    true,
+  );
+
+  window.addEventListener(
+    'mouseup',
+    handleMouseUp,
+    true,
+  );
+
+  document.addEventListener(
+    'keydown',
+    handleKeyDown,
+    true,
+  );
+}
+
+function updateSelectionBlur(
+  selectionId: string,
+  blurAmount: number,
+): void {
+  const selectionRoot =
+    document.getElementById(
+      selectionId,
+    );
+
+  if (!selectionRoot) {
+    return;
+  }
+
+  selectionRoot.dataset.blurAmount =
+    String(blurAmount);
+
+  const panels =
+    selectionRoot.querySelectorAll<HTMLElement>(
+      '[data-private-view-selection-panel="true"]',
+    );
+
+  panels.forEach((panel) => {
+    panel.style.setProperty(
+      'backdrop-filter',
+      `blur(${blurAmount}px)`,
+    );
+
+    panel.style.setProperty(
+      '-webkit-backdrop-filter',
+      `blur(${blurAmount}px)`,
+    );
+  });
+}
+
+function disableSelectionBlur(
+  selectionId: string,
+  pickerId: string,
+): void {
+  document
+    .getElementById(selectionId)
+    ?.remove();
+
+  document
+    .getElementById(pickerId)
+    ?.remove();
+}
+
+function installPrivateViewEscapeHandler(
+  spotlightId: string,
+  selectionId: string,
+  pickerId: string,
+  aiOverlayId: string,
+): void {
+  const root = document.documentElement;
+
+  const listenerInstalled =
+    root.dataset.privateViewEscapeListener ===
+    'true';
+
+  if (listenerInstalled) {
+    return;
+  }
+
+  const handleGlobalEscape = (
+    event: KeyboardEvent,
+  ): void => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    const privateViewElements = [
+      spotlightId,
+      selectionId,
+      pickerId,
+      aiOverlayId,
+    ];
+
+    const protectionIsActive =
+      privateViewElements.some((id) =>
+        Boolean(document.getElementById(id)),
+      );
+
+    if (!protectionIsActive) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    privateViewElements.forEach((id) => {
+      document.getElementById(id)?.remove();
+    });
+
+    void chrome.storage.local.set({
+      enabled: false,
+    });
+
+    console.log(
+      'PrivateView protection stopped with Escape.',
+    );
+  };
+
+  document.addEventListener(
+    'keydown',
+    handleGlobalEscape,
+    true,
+  );
+
+  root.dataset.privateViewEscapeListener =
+    'true';
+}
+/* =========================
+   Current Tab Controls
+
+========================= */
+
+async function installEscapeHandlerOnCurrentTab():
+Promise<void> {
   const tabId = await getActiveTabId();
 
   await chrome.scripting.executeScript({
     target: {
       tabId,
     },
+    func: installPrivateViewEscapeHandler,
+    args: [
+      PRIVATE_VIEW_OVERLAY_ID,
+      PRIVATE_VIEW_SELECTION_ID,
+      PRIVATE_VIEW_PICKER_ID,
+      PRIVATE_VIEW_AI_OVERLAY_ID,
+    ],
+  });
+}
 
+async function applySpotlightToCurrentTab(
+  blurAmount: number,
+  spotlightSize: number,
+): Promise<void> {
+  const tabId =
+    await getActiveTabId();
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId,
+    },
     func: enableSpotlightBlur,
-
     args: [
       PRIVATE_VIEW_OVERLAY_ID,
       blurAmount,
@@ -356,44 +835,145 @@ async function applySpotlightToCurrentTab(
   });
 }
 
-/*
-  إزالة الـBlur من الـTab الحالية.
-*/
 async function removeSpotlightFromCurrentTab():
 Promise<void> {
-  const tabId = await getActiveTabId();
+  const tabId =
+    await getActiveTabId();
 
   await chrome.scripting.executeScript({
     target: {
       tabId,
     },
-
     func: disableSpotlightBlur,
-
-    args: [PRIVATE_VIEW_OVERLAY_ID],
+    args: [
+      PRIVATE_VIEW_OVERLAY_ID,
+    ],
   });
 }
 
-/*
-  رسالة خطأ مناسبة لو الصفحة ممنوع تشغيل
-  Extensions داخلها.
-*/
+async function startSelectionOnCurrentTab(
+  blurAmount: number,
+): Promise<void> {
+  const tabId =
+    await getActiveTabId();
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId,
+    },
+    func: startSelectionPicker,
+    args: [
+      PRIVATE_VIEW_SELECTION_ID,
+      PRIVATE_VIEW_PICKER_ID,
+      blurAmount,
+    ],
+  });
+}
+
+async function removeSelectionFromCurrentTab():
+Promise<void> {
+  const tabId =
+    await getActiveTabId();
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId,
+    },
+    func: disableSelectionBlur,
+    args: [
+      PRIVATE_VIEW_SELECTION_ID,
+      PRIVATE_VIEW_PICKER_ID,
+    ],
+  });
+}
+
+async function updateSelectionOnCurrentTab(
+  blurAmount: number,
+): Promise<void> {
+  const tabId =
+    await getActiveTabId();
+
+  await chrome.scripting.executeScript({
+    target: {
+      tabId,
+    },
+    func: updateSelectionBlur,
+    args: [
+      PRIVATE_VIEW_SELECTION_ID,
+      blurAmount,
+    ],
+  });
+}
+
+async function getCurrentPageModeState():
+Promise<PageModeState> {
+  const tabId =
+    await getActiveTabId();
+
+  const results =
+    await chrome.scripting.executeScript({
+      target: {
+        tabId,
+      },
+      func: (
+        spotlightId: string,
+        selectionId: string,
+        pickerId: string,
+      ): PageModeState => ({
+        spotlightActive: Boolean(
+          document.getElementById(
+            spotlightId,
+          ),
+        ),
+        selectionActive: Boolean(
+          document.getElementById(
+            selectionId,
+          ),
+        ),
+        pickerActive: Boolean(
+          document.getElementById(
+            pickerId,
+          ),
+        ),
+      }),
+      args: [
+        PRIVATE_VIEW_OVERLAY_ID,
+        PRIVATE_VIEW_SELECTION_ID,
+        PRIVATE_VIEW_PICKER_ID,
+      ],
+    });
+
+  return (
+    results[0]?.result ?? {
+      spotlightActive: false,
+      selectionActive: false,
+      pickerActive: false,
+    }
+  );
+}
+
 function showPageError(): void {
   window.alert(
     'PrivateView cannot run on this page.\n\n' +
-      'Try it on a normal website such as YouTube, Google, GitHub, WhatsApp Web, or Gmail.\n\n' +
+      'Try it on a normal website such as YouTube, Google, GitHub, Gmail, or WhatsApp Web.\n\n' +
       'Chrome does not allow extensions to modify chrome:// pages or the Chrome Web Store.',
   );
 }
+
+/* =========================
+   React Popup
+========================= */
 
 function App() {
   const [enabled, setEnabled] =
     useState<boolean>(false);
 
-  const [blurAmount, setBlurAmount] =
-    useState<number>(
-      DEFAULT_SETTINGS.blurAmount,
-    );
+  const [
+    blurAmount,
+    setBlurAmount,
+  ] = useState<number>(
+    DEFAULT_SETTINGS.blurAmount,
+  );
 
   const [
     spotlightSize,
@@ -409,16 +989,22 @@ function App() {
     DEFAULT_SETTINGS.selectedMode,
   );
 
-  const [isModeOpen, setIsModeOpen] =
-    useState<boolean>(false);
+  const [
+    isModeOpen,
+    setIsModeOpen,
+  ] = useState<boolean>(false);
 
   const [
     hoveredMode,
     setHoveredMode,
-  ] = useState<ModeId | null>(null);
+  ] = useState<ModeId | null>(
+    null,
+  );
 
-  const [isLoading, setIsLoading] =
-    useState<boolean>(true);
+  const [
+    isLoading,
+    setIsLoading,
+  ] = useState<boolean>(true);
 
   const currentMode =
     privacyModes.find(
@@ -432,29 +1018,24 @@ function App() {
         mode.id === hoveredMode,
     ) ?? null;
 
-  /*
-    أول ما الـPopup تفتح:
-
-    1. نقرأ الإعدادات المحفوظة.
-    2. نرجع الـSliders لنفس القيم.
-    3. نرجع الزر ON لو كان ON.
-    4. لو الحماية كانت ON نعيد تطبيقها
-       على الصفحة الحالية.
-  */
   useEffect(() => {
     const loadSavedSettings =
       async (): Promise<void> => {
         try {
           const saved =
-            (await chrome.storage.local.get(
+            await chrome.storage.local.get(
               DEFAULT_SETTINGS,
-            )) as PrivateViewSettings;
+            );
 
           const savedBlurAmount =
-            Number(saved.blurAmount);
+            Number(
+              saved.blurAmount,
+            );
 
           const savedSpotlightSize =
-            Number(saved.spotlightSize);
+            Number(
+              saved.spotlightSize,
+            );
 
           const safeBlurAmount =
             Number.isFinite(
@@ -470,18 +1051,16 @@ function App() {
               ? savedSpotlightSize
               : DEFAULT_SETTINGS.spotlightSize;
 
+          const savedMode =
+            saved.selectedMode as ModeId;
+
           const safeMode =
             privacyModes.some(
               (mode) =>
-                mode.id ===
-                saved.selectedMode,
+                mode.id === savedMode,
             )
-              ? saved.selectedMode
+              ? savedMode
               : DEFAULT_SETTINGS.selectedMode;
-
-          const shouldBeEnabled =
-            Boolean(saved.enabled) &&
-            safeMode === 'spotlight';
 
           setBlurAmount(
             safeBlurAmount,
@@ -491,32 +1070,67 @@ function App() {
             safeSpotlightSize,
           );
 
-          setSelectedMode(safeMode);
+          setSelectedMode(
+            safeMode,
+          );
 
-          setEnabled(shouldBeEnabled);
+          const pageState =
+            await getCurrentPageModeState();
 
-          /*
-            لو كانت ON قبل ما الـPopup تتقفل،
-            نطبق الـBlur مرة ثانية على الصفحة الحالية.
-          */
-          if (shouldBeEnabled) {
-            try {
+          if (
+            safeMode === 'spotlight'
+          ) {
+            const shouldEnable =
+              Boolean(saved.enabled);
+
+            if (
+              shouldEnable &&
+              !pageState.spotlightActive
+            ) {
               await applySpotlightToCurrentTab(
                 safeBlurAmount,
                 safeSpotlightSize,
               );
-            } catch (error) {
-              console.error(
-                'Could not apply PrivateView:',
-                error,
-              );
             }
+
+            setEnabled(
+              shouldEnable,
+            );
+
+            return;
           }
+
+          if (
+            safeMode === 'selection'
+          ) {
+            const selectionExists =
+              pageState.selectionActive ||
+              pageState.pickerActive;
+
+            setEnabled(
+              selectionExists,
+            );
+
+            if (
+              Boolean(saved.enabled) &&
+              !selectionExists
+            ) {
+              await chrome.storage.local.set({
+                enabled: false,
+              });
+            }
+
+            return;
+          }
+
+          setEnabled(false);
         } catch (error) {
           console.error(
-            'Could not load settings:',
+            'Could not load PrivateView settings:',
             error,
           );
+
+          setEnabled(false);
         } finally {
           setIsLoading(false);
         }
@@ -525,67 +1139,66 @@ function App() {
     void loadSavedSettings();
   }, []);
 
-  /*
-    اختيار Mode من القائمة.
-  */
   const selectMode = async (
     modeId: ModeId,
   ): Promise<void> => {
+    if (
+      modeId === selectedMode
+    ) {
+      setIsModeOpen(false);
+      setHoveredMode(null);
+
+      return;
+    }
+
+    if (enabled) {
+      try {
+        if (
+          selectedMode ===
+          'spotlight'
+        ) {
+          await removeSpotlightFromCurrentTab();
+        }
+
+        if (
+          selectedMode ===
+          'selection'
+        ) {
+          await removeSelectionFromCurrentTab();
+        }
+      } catch (error) {
+        console.error(
+          'Could not stop current mode:',
+          error,
+        );
+      }
+    }
+
+    setEnabled(false);
     setSelectedMode(modeId);
     setIsModeOpen(false);
     setHoveredMode(null);
 
     await chrome.storage.local.set({
+      enabled: false,
       selectedMode: modeId,
     });
-
-    /*
-      حاليًا Spotlight هو المود المنفذ
-      في Milestone 1.
-
-      لو المستخدم اختار مود قادم أثناء التشغيل،
-      نقفل Spotlight الحالي.
-    */
-    if (
-      enabled &&
-      modeId !== 'spotlight'
-    ) {
-      try {
-        await removeSpotlightFromCurrentTab();
-      } catch (error) {
-        console.error(
-          'Could not remove spotlight:',
-          error,
-        );
-      }
-
-      setEnabled(false);
-
-      await chrome.storage.local.set({
-        enabled: false,
-      });
-    }
   };
 
-  /*
-    تشغيل أو إيقاف PrivateView.
-  */
   const handleToggle =
     async (): Promise<void> => {
       if (isLoading) {
         return;
       }
 
-      /*
-        باقي الـModes ظاهرة في الواجهة،
-        لكنها غير منفذة حاليًا.
-      */
       if (
-        !enabled &&
-        selectedMode !== 'spotlight'
+        selectedMode !==
+          'spotlight' &&
+        selectedMode !==
+          'selection'
       ) {
         window.alert(
-          `${currentMode.name} mode is coming soon.\n\nPlease select Spotlight mode for Milestone 1.`,
+          `${currentMode.name} mode is coming soon.`,
         );
 
         return;
@@ -595,28 +1208,60 @@ function App() {
 
       try {
         if (enabled) {
-          await removeSpotlightFromCurrentTab();
+          if (
+            selectedMode ===
+            'spotlight'
+          ) {
+            await removeSpotlightFromCurrentTab();
+          }
+
+          if (
+            selectedMode ===
+            'selection'
+          ) {
+            await removeSelectionFromCurrentTab();
+          }
 
           setEnabled(false);
 
           await chrome.storage.local.set({
             enabled: false,
           });
-        } else {
+
+          return;
+        }
+        await installEscapeHandlerOnCurrentTab();
+        if (
+          selectedMode ===
+          'spotlight'
+        ) {
+          await removeSelectionFromCurrentTab();
+
           await applySpotlightToCurrentTab(
             blurAmount,
             spotlightSize,
           );
-
-          setEnabled(true);
-
-          await chrome.storage.local.set({
-            enabled: true,
-            blurAmount,
-            spotlightSize,
-            selectedMode,
-          });
         }
+
+        if (
+          selectedMode ===
+          'selection'
+        ) {
+          await removeSpotlightFromCurrentTab();
+
+          await startSelectionOnCurrentTab(
+            blurAmount,
+          );
+        }
+
+        setEnabled(true);
+
+        await chrome.storage.local.set({
+          enabled: true,
+          blurAmount,
+          spotlightSize,
+          selectedMode,
+        });
       } catch (error) {
         console.error(
           'PrivateView toggle failed:',
@@ -629,11 +1274,6 @@ function App() {
       }
     };
 
-  /*
-    تغيير درجة الـBlur وحفظها.
-
-    لو الحماية ON، نحدث الصفحة مباشرة.
-  */
   const handleBlurChange =
     async (
       value: number,
@@ -644,29 +1284,37 @@ function App() {
         blurAmount: value,
       });
 
-      if (
-        enabled &&
-        selectedMode === 'spotlight'
-      ) {
-        try {
+      if (!enabled) {
+        return;
+      }
+
+      try {
+        if (
+          selectedMode ===
+          'spotlight'
+        ) {
           await applySpotlightToCurrentTab(
             value,
             spotlightSize,
           );
-        } catch (error) {
-          console.error(
-            'Could not update blur:',
-            error,
+        }
+
+        if (
+          selectedMode ===
+          'selection'
+        ) {
+          await updateSelectionOnCurrentTab(
+            value,
           );
         }
+      } catch (error) {
+        console.error(
+          'Could not update blur:',
+          error,
+        );
       }
     };
 
-  /*
-    تغيير حجم المنطقة الواضحة وحفظه.
-
-    لو الحماية ON، نحدث الصفحة مباشرة.
-  */
   const handleSpotlightSizeChange =
     async (
       value: number,
@@ -678,20 +1326,52 @@ function App() {
       });
 
       if (
-        enabled &&
-        selectedMode === 'spotlight'
+        !enabled ||
+        selectedMode !==
+          'spotlight'
       ) {
-        try {
-          await applySpotlightToCurrentTab(
-            blurAmount,
-            value,
-          );
-        } catch (error) {
-          console.error(
-            'Could not update spotlight size:',
-            error,
-          );
-        }
+        return;
+      }
+
+      try {
+        await applySpotlightToCurrentTab(
+          blurAmount,
+          value,
+        );
+      } catch (error) {
+        console.error(
+          'Could not update spotlight size:',
+          error,
+        );
+      }
+    };
+
+  const handleReselect =
+    async (): Promise<void> => {
+      if (
+        selectedMode !==
+        'selection'
+      ) {
+        return;
+      }
+
+      try {
+        await startSelectionOnCurrentTab(
+          blurAmount,
+        );
+
+        setEnabled(true);
+
+        await chrome.storage.local.set({
+          enabled: true,
+        });
+      } catch (error) {
+        console.error(
+          'Could not start selection:',
+          error,
+        );
+
+        showPageError();
       }
     };
 
@@ -703,7 +1383,9 @@ function App() {
             Welcome, User
           </span>
 
-          <h1>PrivateView</h1>
+          <h1>
+            PrivateView
+          </h1>
 
           <p>
             Protect sensitive information
@@ -713,7 +1395,11 @@ function App() {
         </div>
 
         <div className="logo">
-          PV
+          <img
+            src={APP_COVER}
+            alt="PrivateView"
+            className="app-cover-image"
+          />
         </div>
       </header>
 
@@ -737,9 +1423,26 @@ function App() {
               Privacy mode
             </small>
 
-            <strong>
-              {currentMode.icon}{' '}
-              {currentMode.name}
+            <strong className="current-mode">
+              <span className="current-mode-icon-box">
+                {isImageIcon(
+                  currentMode.icon,
+                ) ? (
+                  <img
+                    src={currentMode.icon}
+                    alt={`${currentMode.name} icon`}
+                    className="current-mode-icon-image"
+                  />
+                ) : (
+                  <span className="current-mode-symbol">
+                    {currentMode.icon}
+                  </span>
+                )}
+              </span>
+
+              <span className="current-mode-name">
+                {currentMode.name}
+              </span>
             </strong>
           </span>
 
@@ -792,7 +1495,19 @@ function App() {
                       }
                     >
                       <span className="mode-icon">
-                        {mode.icon}
+                        {isImageIcon(
+                          mode.icon,
+                        ) ? (
+                          <img
+                            src={mode.icon}
+                            alt={`${mode.name} icon`}
+                            className="mode-icon-image"
+                          />
+                        ) : (
+                          <span className="mode-icon-symbol">
+                            {mode.icon}
+                          </span>
+                        )}
                       </span>
 
                       <span className="mode-name">
@@ -844,8 +1559,10 @@ function App() {
           </h2>
 
           <p>
-            Turn PrivateView on to
-            protect the current webpage.
+            {selectedMode ===
+            'selection'
+              ? 'Turn PrivateView on, then drag over the area you want to keep visible.'
+              : 'Turn PrivateView on to protect the current webpage.'}
           </p>
         </div>
 
@@ -932,53 +1649,107 @@ function App() {
             />
           </div>
 
-          <div className="divider" />
+          {selectedMode ===
+            'spotlight' && (
+            <>
+              <div className="divider" />
 
-          <div className="setting">
-            <div className="setting-header">
-              <div>
-                <h3>
-                  Spotlight size
-                </h3>
+              <div className="setting">
+                <div className="setting-header">
+                  <div>
+                    <h3>
+                      Spotlight size
+                    </h3>
 
-                <p>
-                  Control the visible
-                  area around the mouse.
-                </p>
+                    <p>
+                      Control the visible
+                      area around the mouse.
+                    </p>
+                  </div>
+
+                  <span className="setting-value">
+                    {spotlightSize}px
+                  </span>
+                </div>
+
+                <input
+                  type="range"
+                  min="120"
+                  max="500"
+                  step="20"
+                  value={spotlightSize}
+                  onChange={(event) =>
+                    void handleSpotlightSizeChange(
+                      Number(
+                        event.target.value,
+                      ),
+                    )
+                  }
+                />
               </div>
+            </>
+          )}
 
-              <span className="setting-value">
-                {spotlightSize}px
-              </span>
-            </div>
+          {selectedMode ===
+            'selection' && (
+            <>
+              <div className="divider" />
 
-            <input
-              type="range"
-              min="120"
-              max="500"
-              step="20"
-              value={spotlightSize}
-              onChange={(event) =>
-                void handleSpotlightSizeChange(
-                  Number(
-                    event.target.value,
-                  ),
-                )
-              }
-            />
-          </div>
+              <div className="setting">
+                <div className="setting-header">
+                  <div>
+                    <h3>
+                      Selection area
+                    </h3>
+
+                    <p>
+                      Draw a new visible area
+                      on the current page.
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  className="mode-trigger"
+                  onClick={() =>
+                    void handleReselect()
+                  }
+                  style={{
+                    marginTop: '14px',
+                  }}
+                >
+                  <span className="mode-trigger-content">
+                    <small>
+                      Selection mode
+                    </small>
+
+                    <strong>
+                      ▣ Select another area
+                    </strong>
+                  </span>
+
+                  <span className="mode-arrow">
+                    &gt;
+                  </span>
+                </button>
+              </div>
+            </>
+          )}
         </section>
       )}
 
       {!enabled && (
         <div className="disabled-message">
-          Turn protection ON to customize
-          the blur settings.
+          {selectedMode ===
+          'selection'
+            ? 'Turn protection ON, then drag over the area you want to keep visible.'
+            : 'Turn protection ON to customize the blur settings.'}
         </div>
       )}
 
       <footer>
-        PrivateView · Milestone 1
+        PrivateView · Privacy Protection
       </footer>
     </main>
   );
